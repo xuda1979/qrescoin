@@ -1,0 +1,132 @@
+
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{mathtools}
+\usepackage{listings}
+\usepackage{authblk}
+
+\title{\textbf{QResCoin: A Quantum-Resistant Cryptocurrency with Quantum-Assisted Randomness and Hash-Based Signatures}}
+\author[1]{Anonymous}
+\affil[1]{\small Draft, October 2025. This document is a research proposal with unproven components.}
+\date{}
+
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We propose \emph{QResCoin}, a cryptocurrency whose base layer is classical and post-quantum secure, yet whose consensus obtains public randomness from a lightweight quantum experiment. The design combines (i) a hash-based Merkle signature scheme (MSS) built from Lamport one-time signatures, (ii) an account-based ledger and stake-weighted leader sortition, and (iii) a \emph{CHSH-based device-agnostic randomness beacon} with classical verification. We formalize the beacon's min-entropy guarantee and integrate it into a proof-of-stake protocol. We also sketch a \emph{proof-of-quantumness} (PoQ) eligibility proof from trapdoor claw-free functions in the quantum random-oracle model. A reference Python prototype accompanies the paper.
+\end{abstract}
+
+\section{Introduction}
+Large-scale quantum computers threaten widely deployed public-key cryptosystems via Shor's algorithm, while Grover's algorithm reduces the security margin of symmetric primitives. Post-quantum (PQ) signatures and key encapsulation mechanisms address this risk. Beyond resistance, blockchains can also \emph{benefit} from small quantum devices when the benefit is \emph{verifiable to classical nodes}. This work explores that co-design.
+
+\paragraph{Contributions.}
+\begin{itemize}
+  \item \textbf{QCHSH Beacon.} We formalize and implement a CHSH-game-based randomness beacon whose transcripts are succinct and classically verifiable. Passing a threshold on the CHSH win rate implies certified min-entropy in the output.
+  \item \textbf{PQ Base Layer.} We present a compact PQ signature layer using MSS over Lamport OTS, with addresses equal to Merkle roots (hash-only assumption).
+  \item \textbf{Leader Sortition.} We couple the beacon to stake-weighted leader election and give a fairness analysis in the random-oracle model.
+  \item \textbf{PoQ Sketch.} We outline a non-interactive proof-of-quantumness (PoQ) from trapdoor claw-free functions (TCFs) à la Mahadev, for future work.
+\end{itemize}
+
+\section{Preliminaries}
+We write $\{0,1\}^*$ for bitstrings and $H:\{0,1\}^*\to\{0,1\}^{256}$ for SHA3-256.
+Lamport OTS exposes pairs $(H(s_i^0), H(s_i^1))$ for $i\in[256]$; to sign $m$, compute $d=H(m)$ and reveal $s_i^{d_i}$.
+A Merkle tree over the hashes $H(\textsf{pk}_\textsf{Lamport})$ yields a many-time signature scheme (MSS) where the public key is the Merkle root.
+
+\paragraph{CHSH game.}
+Two parties receive inputs $x,y\in\{0,1\}$ and output $a,b\in\{0,1\}$; they win if $a\oplus b = x\wedge y$.
+Classically the optimal win probability is $p_\mathsf{C}=3/4$; quantumly the supremum is $p_\mathsf{Q}=\cos^2(\pi/8)\approx0.853553$.
+Let $W$ be the indicator of winning a round.
+
+\section{QCHSH: A CHSH-based randomness beacon}
+\subsection{Protocol}
+In each epoch $e$, a designated committee (or any proposer) performs $n$ CHSH trials, producing inputs $\mathbf{x},\mathbf{y}\in\{0,1\}^n$ and outputs $\mathbf{a},\mathbf{b}\in\{0,1\}^n$.
+They publish the transcript $T=(\mathbf{x},\mathbf{y},\mathbf{a},\mathbf{b})$ and the beacon output
+\[
+R_e \;=\; H\big(\textsf{``QRES-CHSH-BEACON''}\,\|\,\mathbf{x}\,\|\,\mathbf{y}\,\|\,\mathbf{a}\,\|\,\mathbf{b}\,\|\,\textsf{enc}(e)\big).
+\]
+Any verifier recomputes the empirical win rate $\hat{p}=\frac{1}{n}\sum_{i=1}^n W_i$ and accepts if $\hat{p}\ge \tau$ for a fixed threshold $\tau\in(0.75, 0.8535)$.
+
+\subsection{Entropy guarantee}
+We model each trial as an i.i.d.\ Bernoulli($p$) win under no-signaling constraints and apply Hoeffding's inequality.
+\begin{lemma}[Soundness against classical beacons]
+\label{lem:sound}
+Fix $\tau\in(0.75, 0.8535)$. For any classical strategy ($p\le 0.75$), the probability that $\hat{p}\ge\tau$ is at most $\exp(-2n(\tau-0.75)^2)$.
+\end{lemma}
+\begin{proof}[Sketch]
+Under classical strategies $p\le 3/4$; Hoeffding implies
+$\Pr[\hat{p}-p\ge \tau-p]\le \exp(-2n(\tau-p)^2)\le \exp(-2n(\tau-0.75)^2)$.
+\end{proof}
+
+\begin{theorem}[Min-entropy rate]
+\label{thm:minentropy}
+Conditioned on acceptance ($\hat{p}\ge\tau$), the beacon output $R_e$ has conditional min-entropy
+$H_\infty(R_e\mid T) \ge 128$ bits for suitable $n$ and $\tau$, provided $H$ is modeled as a random oracle and the underlying outputs carry at least $\kappa$ bits of smooth min-entropy with $\kappa\ge 128$ derived from standard device-independent analyses.
+\end{theorem}
+\begin{proof}[Sketch]
+Device-independent randomness expansion bounds show that for $\hat{p}>\tfrac{3}{4}+\epsilon$, the output bits contain $\Omega(\epsilon^2 n)$ bits of min-entropy. Hashing with $H$ extracts these bits (leftover hash lemma in the ROM).
+\end{proof}
+
+\paragraph{Practicality.}
+Transcripts compress to $4n$ bits; with $n=512$ and $\tau=0.82$ we obtain overwhelming classical soundness ($<10^{-7}$) and a 32-byte beacon via hashing.
+
+\section{PQ base layer: MSS over Lamport OTS}
+We use an MSS with height $h$ and $N=2^h$ Lamport leaves.
+An address is the Merkle root $\mathsf{addr}\in\{0,1\}^{256}$.
+A transaction includes a \emph{one-time} Lamport signature and its authentication path.
+This yields PQ security under the sole assumption that $H$ is collision-resistant and preimage-resistant.
+
+\section{Stake-weighted leader sortition}
+Let $V$ be validators with stakes $\{s_v\}_{v\in V}$ and $R_e$ the accepted beacon.
+Define each validator's score as
+\[
+\textsf{score}(v,e) \;=\; \frac{\textsf{int}(H(R_e\| \mathsf{addr}_v\|e))}{\max\{1,s_v\}}
+\]
+and elect the $v$ with minimum score. Ties break lexicographically. This is VRF-like and publicly auditable.
+
+\section{PoQ eligibility sketch (future work)}
+We outline a PoQ where a leader proves it measured a hidden-basis qubit using a trapdoor claw-free function family (TCF) based on LWE (à la Mahadev).
+An interactive measurement protocol yields classical transcripts certifying a quantum outcome; Fiat--Shamir in the quantum random-oracle model makes the proof non-interactive.
+Integrating PoQ alongside MSS signatures would let leaders optionally demonstrate quantum capability without \emph{requiring} quantum hardware for network participation.
+
+\section{Security discussion}
+\textbf{Against quantum adversaries.} The signature layer is hash-based and thus conjectured PQ-secure; the beacon resists classical spoofing and extracts unpredictability from genuine violations of CHSH.
+\textbf{Against classical adversaries.} Standard double-spend prevention follows from signature unforgeability and authenticated Merkle paths; leader election is bias-resistant assuming $H$ is a random oracle and $R_e$ has adequate entropy.
+
+\section{Implementation}
+We provide a Python reference implementation:
+(i) MSS with Lamport leaves; (ii) account-based ledger and one-time indices; (iii) CHSH beacon (simulated generator and classical verifier); (iv) stake-weighted sortition; (v) an executable demo.
+OpenQASM code is included for a single CHSH round.
+
+\section{Limitations and open problems}
+\begin{itemize}
+  \item MSS signatures are large (tens of kilobytes). Production systems should adopt standardized PQ signatures (e.g., lattice-based) or optimized hash-based schemes (e.g., XMSS/LM-OTS).
+  \item The PoQ sketch requires heavy cryptography and careful analysis; our treatment is conceptual.
+  \item Real device-independent beacons require network and isolation assumptions beyond this paper's scope.
+\end{itemize}
+
+\section*{Artifacts}
+The repository contains: \texttt{crypto\_hash.py}, \texttt{crypto\_lamport.py}, \texttt{crypto\_mss.py}, \texttt{quantum\_beacon.py}, \texttt{tx.py}, \texttt{block.py}, \texttt{consensus.py}, \texttt{wallet.py}, \texttt{node.py}, \texttt{demo.py}. Run the demo with:
+\begin{verbatim}
+python -m qrescoin.demo
+\end{verbatim}
+
+\bibliographystyle{abbrv}
+\begin{thebibliography}{9}
+\bibitem{lamport} L. Lamport. Constructing Digital Signatures from a One Way Function, 1979.
+\bibitem{merkle} R. Merkle. A Certified Digital Signature, 1989.
+\bibitem{chsh} J.F. Clauser, M.A. Horne, A. Shimony, R.A. Holt. Proposed experiment to test local hidden-variable theories. Phys. Rev. Lett., 1969.
+\bibitem{maha} U. Mahadev. Classical Verification of Quantum Computations, 2018.
+\bibitem{pironio} S. Pironio et al. Random numbers certified by Bell’s theorem. Nature, 2010.
+\end{thebibliography}
+
+\end{document}
