@@ -1,0 +1,99 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{hyperref}
+\usepackage{inconsolata}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\title{QResCoin-Q+: A Hash-Based, Quantum-Resistant Signature Layer\\
+\large XMSS-Lite over WOTS+ with Domain-Separated SHAKE256 and a CHSH Randomness Beacon}
+\author{QResCoin Research}
+\date{October 2025}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present \emph{QResCoin-Q+}, an upgrade to the QResCoin educational cryptocurrency prototype that replaces Lamport/MSS signatures with a standardized hash-based design: \textbf{WOTS+} leaves wrapped in a \textbf{single-tree XMSS}-style Merkle construction, with \textbf{stateless per-leaf secret derivation} from a master seed. Hash computations use \textbf{SHAKE256} with strict \emph{domain separation}. We retain QResCoin's CHSH-based (simulated) randomness beacon for leader sortition, demonstrating compatibility between post-quantum signatures and beacon-driven consensus randomness. The scheme is grounded in RFC 8391 (XMSS/WOTS+) and NIST SP~800--208 (hash-based signatures), providing post-quantum security under standard assumptions on cryptographic hash functions. We supply reference code and a minimal demo.
+\end{abstract}
+
+\section{Introduction}
+QResCoin is a tiny educational prototype illustrating an account-based ledger, hash-based signatures, stake-weighted leader sortition, and a CHSH-inspired randomness beacon.\footnote{See repository README for overview of QResCoin features, including CHSH beacon and MSS over Lamport.} To bring the signature layer closer to standardized post-quantum practice while preserving simplicity, we introduce \textbf{QResCoin-Q+}: a WOTS+/XMSS-based signature module that can sign a limited number of messages (e.g., $2^h$ for tree height $h$) with compact one-time leaves and Merkle authentication paths. The design is \emph{hash-only}: there is no reliance on integer factoring, discrete logarithms, or lattices.
+
+\paragraph{Contributions.} (1) A compact WOTS+ implementation with domain-separated SHAKE256 and per-step bitmasks; (2) a single-tree XMSS-like layer with \emph{stateless} per-leaf secret derivation from a master seed, plus precomputed trees for small $h$; (3) a clean reference API and demo; and (4) a discussion of integration points with a CHSH-based randomness beacon and an account-based ledger.
+
+\section{Background}
+\subsection{Hash-based signatures}
+Stateful hash-based signatures are among the most conservative approaches to post-quantum signatures. NIST SP~800--208 approves two stateful families: LMS/HSS and XMSS/XMSS$^{\text{MT}}$.\cite{nist800208} XMSS is also specified by the IRTF in RFC~8391, including WOTS+ and XMSS constructions with security proofs under standard hash-function assumptions.\cite{rfc8391}
+
+Stateless hash-based signatures (e.g., SPHINCS+) remove the signing-state requirement at the cost of larger signatures and greater implementation complexity. SPHINCS+ was standardized as FIPS~205 in 2024.\cite{fips205} For teaching and rapid prototyping, a stateful XMSS design is often preferable due to conceptual simplicity and compactness.
+
+\subsection{WOTS+ and XMSS}
+WOTS+ (Winternitz One-Time Signature Plus) uses $L$ independent hash chains of length $w{-}1$, where $w$ is a power-of-two Winternitz parameter.\cite{rfc8391} A message digest is encoded in base-$w$ and each digit determines how many steps to move along its chain to produce the signature element. XMSS authenticates many WOTS+ public keys by placing them as leaves in a Merkle tree; a signature provides the WOTS+ signature and a logarithmic-size authentication path.
+
+\subsection{Randomness beacons and CHSH}
+QResCoin includes a classical verification of a simulated quantum CHSH transcript as a didactic \emph{randomness beacon}.\footnote{CHSH: Clauser--Horne--Shimony--Holt inequality. See \cite{chsh1969}.} Our proposal is orthogonal to the beacon: replacing the signature scheme does not impact the statistical soundness of the randomness source. In production, the beacon would be fed by real hardware or multi-source mixing.
+
+\section{Design Overview}
+\subsection{Threat model and goals}
+We aim for signatures that remain secure in the presence of large-scale quantum adversaries running Shor's or Grover's algorithms. Security reduces to the preimage/collision resistance of the chosen hash (SHAKE256), with domain separation to avoid cross-protocol interactions. The design is intended for \emph{education}: clarity and compactness over maximum throughput.
+
+\subsection{Key material}
+The signer holds three $n$-byte seeds: a master secret seed $\mathsf{SK\_seed}$, a PRF seed $\mathsf{PRF\_seed}$ (for per-signature randomness $R$), and a public seed $\mathsf{PUB\_seed}$ used to derive WOTS+ per-step bitmasks. Public key is $(\mathsf{root}, \mathsf{PUB\_seed})$, where $\mathsf{root}$ is the Merkle root of compressed WOTS+ public keys.
+
+\subsection{Per-leaf stateless derivation}
+For leaf index $i$ and chain index $j$, the one-time secret element is $\mathsf{sk}_{i,j} \gets \mathsf{PRF}(\mathsf{SK\_seed},\, \texttt{"SK"} \,\|\, i \,\|\, j)$. Bitmasks for WOTS+ chain steps are $\mathsf{mask}_{i,j,s} \gets \mathsf{H}(\texttt{"WOTS.MASK"},\, \mathsf{PUB\_seed},\, i, j, s)$. These choices mimic the \emph{tweakable} structure used in XMSS/WOTS+ security proofs.
+
+\subsection{Hashing and domain separation}
+We use SHAKE256 with string-based domain tags (\texttt{"XMSS.MSG"}, \texttt{"XMSS.NODE"}, \texttt{"XMSS.LEAF"}, \texttt{"WOTS.F"}, \texttt{"WOTS.MASK"}, etc.). This ensures distinct RO-model domains for different internal primitives and prevents subtle cross-use.
+
+\subsection{Signature and verification}
+To sign $M$ at index $i$:
+\begin{enumerate}[nosep]
+  \item Sample $R \gets \mathsf{PRF}(\mathsf{PRF\_seed},\, \texttt{"R"} \,\|\, i \,\|\, M)$.
+  \item Compute message digest $m \gets \mathsf{H}(\texttt{"XMSS.MSG"}, R, \mathsf{root}, i, M)$.
+  \item Produce WOTS+ signature $\sigma^{\mathsf{wots}}$ on $m$ using the derived $\mathsf{sk}_{i,\cdot}$ and bitmasks.
+  \item Output $\sigma = (i, R, \sigma^{\mathsf{wots}}, \mathsf{AuthPath}_i)$.
+\end{enumerate}
+Verification reconstructs the WOTS+ public key from $\sigma^{\mathsf{wots}}$ and $m$, compresses it to a leaf, and climbs the path to a root, which must match the public $\mathsf{root}$.
+
+\section{Implementation Notes}
+We provide Python reference code in \texttt{crypto\_wots.py} and \texttt{crypto\_xmss.py}, with a minimal driver \texttt{demo\_xmss.py}. The code uses only the Python standard library (\texttt{hashlib}, \texttt{hmac}, \texttt{os}) and defaults to parameters $(n{=}32, w{=}16, h{=}8)$, giving:
+\[
+L=\text{len}_1+\text{len}_2 = 64 + 3 = 67 \quad \text{WOTS chains}
+\]
+and at most $2^h=256$ signatures per keypair. These are compact and fast enough for classroom experiments.
+
+\paragraph{State management.} XMSS is stateful: each leaf must be used at most once. Our demo increments an index counter and raises an exception upon exhaustion. For production designs, persistent state and secure backups are essential (see SP~800--208 discussions).
+
+\section{Integration with QResCoin}
+The new signature layer is \emph{orthogonal} to the consensus and beacon layers and can replace Lamport/MSS for transactions and block signatures. Because the original repo targets pedagogy, we ship the new module as an \emph{additive} path with its own demo so existing users are unaffected; integration can be as simple as:
+\begin{itemize}[nosep]
+  \item Replacing signature calls in the wallet with XMSS sign/verify.
+  \item Setting tree height based on expected lifetime signatures per key.
+  \item Binding beacon output (CHSH transcript hash) into the per-round message preimage if desired.
+\end{itemize}
+
+\section{Security Discussion}
+\paragraph{Post-quantum rationale.} Security relies on the collision and (second-)preimage resistance of SHAKE256, with Winternitz and Merkle parameters chosen to meet standard targets. Unlike lattice or number-theoretic schemes, there is no known sub-exponential quantum attack beyond the Grover-type quadratic speedup on hashing (handled by parameter margins).
+
+\paragraph{Parameter choices.} $n{=}32$, $w{=}16$ is a common, balanced choice; larger $w$ reduces WOTS chain count but increases chain depth. Tree height $h$ sets the signature capacity. For production, see the parameterization guidance in RFC~8391 and NIST SP~800--208.
+
+\paragraph{Stateless alternatives.} SPHINCS+ removes state at the cost of larger signatures (e.g., tens of kilobytes). It is now standardized as FIPS~205 and is recommended when state management is operationally risky.
+
+\section{Limitations and Future Work}
+Our \emph{XMSS-Lite} uses full precomputation of leaves and authentication paths and is meant for small $h$ in a single-process demo. A production wallet would adopt a treehash/BDS traversal algorithm and persistent state, possibly with multi-tree variants or hybridization with SPHINCS+ for stateless addresses.
+
+\section{Conclusion}
+QResCoin-Q+ modernizes the signature layer of an educational cryptocurrency demo with a clean, standardized post-quantum design that pairs naturally with a (simulated) quantum-derived randomness beacon. The provided code and demo should serve as a compact reference for students and researchers.
+
+\begin{thebibliography}{99}
+\bibitem{rfc8391} H\"{u}lsing, R., Butin, D., Gazdag, S., Rijneveld, J., M\"{u}ller, A. \emph{RFC 8391: XMSS: eXtended Merkle Signature Scheme}. IRTF, 2018. \url{https://www.rfc-editor.org/info/rfc8391}
+\bibitem{nist800208} NIST. \emph{SP 800-208: Recommendation for Stateful Hash-Based Signature Schemes}. 2020. \url{https://doi.org/10.6028/NIST.SP.800-208}
+\bibitem{fips205} NIST. \emph{FIPS 205: Stateless Hash-Based Digital Signature Standard (SPHINCS+)}. 2024. \url{https://nvlpubs.nist.gov/nistpubs/fips/nist.fips.205.pdf}
+\bibitem{chsh1969} Clauser, J.F., Horne, M.A., Shimony, A., Holt, R.A. \emph{Proposed Experiment to Test Local Hidden-Variable Theories}. Phys. Rev. Lett. 23, 880 (1969).
+\end{thebibliography}
+\end{document}
